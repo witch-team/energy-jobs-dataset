@@ -45,23 +45,25 @@ rawdata_long <- rawdata_long %>% filter(value!=0)
 
 
 #Convert all units to PJ and GW
-#here just extraction for all fuels, and only  refinery
-#refinery, .0611     # kbarrels/day -> PJ/day
+#here just extraction for all fuels, and refinery manually
+#oil, refinery, 0.0061     # kbarrels/day -> PJ/day (https://www.sciencedirect.com/topics/engineering/oil-equivalent)
+#biodiesel, 0.0327   # Ml -> PJ
+#ethanol, 0.0214     # Ml -> PJ
 fuel_conv_units <- "fuel, conv
-coal_hard, 22.74       # Mt -> PJ
+coal_hard, 22.74    # Mt -> PJ
 coal_lignite, 10    # Mt -> PJ
 oil, 0.0418         # ktoe -> PJ
 oil_unconv, 0.0418  # ktoe -> PJ
 gas, 0.0418         # ktoe -> PJ
 gas_unconv, 0.0418  # ktoe -> PJ
-biodiesel, 0.0327   # Ml -> PJ
-ethanol, 0.0214     # Ml -> PJ
 "
-fuel_conv_units <- read_csv(fuel_conv_units, comment = "#")
+fuel_conv_units <- read_csv(fuel_conv_units, comment = "#", show_col_types = FALSE)
 rawdata_long <- merge(rawdata_long, fuel_conv_units, by="fuel", all=T)
 rawdata_long <- rawdata_long %>%
   mutate(value = ifelse(category=="extraction" & fuel %in% fuel_conv_units$fuel, value / conv, value)) %>%
-  mutate(value = ifelse(category == "refinery", value / (.00601 *365), value)) %>%
+  mutate(value = ifelse(category == "refinery" & fuel=="oil", value / (0.0061 * 365), value)) %>%
+  mutate(value = ifelse(category == "refinery" & fuel=="biodiesel", value / (0.0327 * 365), value)) %>%
+  mutate(value = ifelse(category == "refinery" & fuel=="ethanol", value / (0.0214 * 365), value)) %>%
   select(fuel,category,iso3,value)
 
 Q_OUT_TYPE <- read.xlsx(xlsxFile = energy_jobs_database_file, sheet = "Q_OUT_TYPE", startRow = 1)
@@ -76,14 +78,14 @@ hydro_shares <- continents %>% full_join(melt(as.data.table(hydro_shares), id.va
 #apply Hydro relative shares
 rawdata_long <- rawdata_long %>% left_join(hydro_shares) %>% mutate(share=ifelse(is.na(share), 1, share)) %>% mutate(fuel = ifelse(str_detect(fuel, "hydro"), str_replace(fuel,"\\_.*",""), fuel)) %>% group_by(iso3,fuel,category) %>% dplyr::summarize(value=weighted.mean(value, w = share, na.rm = T)) %>% ungroup() %>% as.data.frame()
 
+#Get Job units correct
+# Apply 17% or .17 for ethanol and biodiesel jobs to only have direct jobs (not indirect nor induced)
+#Based on Urbanchuk, J. M. (2019) paper. We consider only Agriculture & Ethanol production jobs  
+rawdata_long <- rawdata_long %>% mutate(value = ifelse(fuel %in% c("biodiesel", "ethanol") & category=="refinery", value * 0.17, value))
+
 #biofuels: assign as trbiofuel (traditional biofuel)
 rawdata_long <- rawdata_long %>% mutate(fuel = ifelse(str_detect(fuel, "ethanol|biodiesel"), "trbiofuel", fuel)) %>% 
   group_by(iso3,fuel,category) %>% dplyr::summarize(value=mean(value, na.rm = T)) %>% ungroup() %>% as.data.frame()
-
-#Get Job units correct
-# Apply 17% of .17 for ethanol and biodiesel jobs to only have direct jobs (not indirect nor induced)
-#Based on Urbanchuk, J. M. (2019) paper. We consider only Agriculture & Ethanol production jobs  
-rawdata_long <- rawdata_long %>% mutate(value = ifelse(fuel %in% c("biodiesel", "ethanol") & category=="refinery", value * 0.17, value))
 
 
 add_fossil_manufacturing = T
@@ -91,7 +93,7 @@ add_fossil_manufacturing = T
 #Job years/MW: Coal	5.1, Gas	2.9, Nuclear	1.3
 #assign for USA and China (oecd/non-oecd) which then will be assigned to the total world number
 #For oil, assume it is the same as gas power plants
-manufacturing_dominich <-    fread("fuel, category, value
+manufacturing_dominich <-    fread("fuel,    category,      value
                                     coal,    manufacturing, 5.1
                                     gas,     manufacturing, 2.9
                                     oil,     manufacturing, 2.9
